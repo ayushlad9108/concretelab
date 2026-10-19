@@ -19,7 +19,7 @@
 <section class="card span12"><div class="sectionhead"><div><h2>Chart data export</h2><p class="sub">Download the values behind the charts as an Excel workbook, alongside prediction and matrix exports below.</p></div><button class="btn" id="exportCharts">Export chart data (.xlsx)</button></div></section>
 <section class="card span12"><div class="sectionhead"><div><h2>Prediction results</h2><p class="sub">The website never clamps predictions to actual values or the control range.</p></div><button class="btn" id="exportPred">Export predictions (.xlsx)</button></div><div id="predTable" class="tablewrap"></div></section>
 <section class="card span12" id="legacyMatrices"><div class="sectionhead"><div><h2>Six component inputs by experiment</h2><p class="sub">These values are generated only after uploading the component and Lab K workbooks. The classic A-14 matrix sizes are 6 components × 21 experiments (S is 7 × 21 including totals), Z is 63 × 21, and CC matrices are 63 × 63.</p></div></div><canvas class="chart" id="componentExperimentChart" width="1200" height="360" aria-label="Chart of six component inputs across experiments"></canvas><p class="filehint">Each line represents one component; the horizontal axis is the uploaded experiment/specimen ID. Values are taken from the uploaded workbook, not preset data.</p><div class="actions" style="margin-top:12px;flex-wrap:wrap"><button class="btn matrix-download" data-matrix="s">S matrix — six component rows plus Total · Download (.xlsx)</button><button class="btn matrix-download" data-matrix="z">Z matrix — polynomial terms × experiments · Download (.xlsx)</button><button class="btn matrix-download" data-matrix="cc">CC matrix — Z × Zᵀ · Download (.xlsx)</button><button class="btn matrix-download" data-matrix="inv">CC inverse matrix · Download (.xlsx)</button><button class="btn matrix-download" data-matrix="unit">CC × CC inverse — unit-matrix check · Download (.xlsx)</button><button class="btn matrix-download" data-matrix="rhs">Z × current Lab K · Download (.xlsx)</button><button class="btn matrix-download" data-matrix="ccalpha">CC × α reconstructed RHS · Download (.xlsx)</button><button class="btn matrix-download" data-matrix="alpha">α coefficient vector · Download (.xlsx)</button></div><p class="filehint" id="matrixDownloadNote">Upload both workbooks and calculate before downloading. The full A-14 polynomial matrices require exactly six parameters; if the upload has a different parameter count, the downloads will explain the supported dimensions rather than silently export incorrect matrices.</p></section>
-<section class="card span12"><div class="sectionhead"><div><h2>Matrix diagnostics</h2><p class="sub">CC = Z·Zᵀ. It is symmetric by construction. CC is not generally the identity; CC·CC⁺ is a projection when rank-deficient.</p></div><div class="actions"><button class="btn" id="exportCC">Export full CC matrix (.xlsx)</button><button class="btn" id="exportReport">Export full validation report (.xlsx)</button></div></div><div class="metrics" id="matrixMetrics"></div><div class="resultline" id="matrixNote"></div><details style="margin-top:14px"><summary><b>Preview CC matrix (first 24 rows/columns)</b></summary><div id="ccPreview" class="tablewrap" style="margin-top:10px"></div></details></section>
+<section class="card span12"><div class="sectionhead"><div><h2>Matrix diagnostics</h2><p class="sub">Pearson correlation coefficient matrix over the n input parameters (n×n). Diagonal = 1 by definition; off-diagonal = Pearson r between parameter pairs. The A-14 polynomial Gram matrix (Z·Zᵀ) is available separately via the legacy downloads below.</p></div><div class="actions"><button class="btn" id="exportCC">Export Pearson CC matrix (.xlsx)</button><button class="btn" id="exportReport">Export full validation report (.xlsx)</button></div></div><div class="metrics" id="matrixMetrics"></div><div class="resultline" id="matrixNote"></div><details style="margin-top:14px"><summary><b>Preview Pearson CC matrix (first 10 rows/columns)</b></summary><div id="ccPreview" class="tablewrap" style="margin-top:10px"></div></details></section>
 </div><div class="foot">ConcreteLab is a transparent calculation and verification aid, not a certified concrete-design tool. Verify engineering decisions against the original method and laboratory standards.</div></main>
 <script>
 let data=null, latest=null;
@@ -41,10 +41,154 @@ function chooseLambda(F,y,train,mode){let grid=[0,1e-10,1e-8,1e-6,1e-4,.001,.01,
 function fitPredict(F,y,train,all,lambda){let K=kernel(F,train).map(r=>r.slice());K.forEach((r,i)=>r[i]+=lambda);let a=solve(K,train.map(i=>y[i]));return all.map(i=>train.reduce((s,id,k)=>s+a[k]*dot(F[id],F[i]),0))}
 function makeCC(F){let m=F[0].length;return F.map((row,i)=>F.map((other,j)=>dot(row,other)))}
 function transpose(A){return A[0].map((_,j)=>A.map(r=>r[j]))}
-function calculate(){if(!data){$('fileStatus').textContent='Upload both required files before calculating.';return}try{const n=data.labels.length;if(n<1||n>10)throw Error('Use between 1 and 10 parameters.');if(data.rows.some(r=>r.x.length!==n||!Number.isFinite(r.y)))throw Error('Every row must contain all parameter values and a numeric Lab K target.');const features=data.rows.map(r=>featureVector(r.x)),X=proportionFeatures(data.rows),y=data.rows.map(r=>r.y),fitAll=$('fitAll').checked,train=data.rows.map((r,i)=>i).filter(i=>fitAll||/^E/i.test(data.rows[i].id));if(train.length<3)throw Error('At least three training specimens are required.');const mode=$('selection').value,chosen=mode==='a14'?{lambda:1e-8,results:[]}:chooseRidgeLambda(X,y,train,mode==='mae'?'mae':'rmse');const pred=ridgeFitPredict(X,y,train,data.rows.map((_,i)=>i),chosen.lambda);const cv=chosen.results.find(x=>x.lambda===chosen.lambda);let cvMetric=cv?{mae:cv.mae,rmse:cv.rmse}:null;const controls=data.rows.map((r,i)=>i).filter(i=>!train.includes(i));const controlMetric=controls.length?metrics(controls.map(i=>y[i]),controls.map(i=>pred[i])):null;const fitPred=train.map(i=>pred[i]),fitMetric=metrics(train.map(i=>y[i]),fitPred);const F=transpose(features),cc=makeCC(F);let maxSym=0;for(let i=0;i<cc.length;i++)for(let j=0;j<cc.length;j++)maxSym=Math.max(maxSym,Math.abs(cc[i][j]-cc[j][i]));let rankEstimate=0;const kk=kernel(features,train); // rank estimate from nonzero pivots via elimination
-let A=kk.map(r=>r.slice()),scale=Math.max(...A.flat().map(Math.abs),1);for(let k=0;k<A.length;k++){let p=k;for(let i=k+1;i<A.length;i++)if(Math.abs(A[i][k])>Math.abs(A[p][k]))p=i;if(Math.abs(A[p][k])<scale*1e-10)continue;[A[k],A[p]]=[A[p],A[k]];for(let i=k+1;i<A.length;i++){let q=A[i][k]/A[k][k];for(let j=k;j<A.length;j++)A[i][j]-=q*A[k][j]}rankEstimate++}
-latest={features,cc,pred,y,train,controls,lambda:chosen.lambda,cvMetric,fitMetric,controlMetric,maxSym,rankEstimate,chosen,fitAll};renderResults();}catch(e){$('fileStatus').textContent='Calculation stopped: '+e.message;console.error(e)}}
-function renderResults(){let r=latest;overview();$('performanceMetrics').innerHTML=[['E-series LOOCV MAE',r.cvMetric?fmt(r.cvMetric.mae):'N/A','lower is better'],['E-series LOOCV RMSE',r.cvMetric?fmt(r.cvMetric.rmse):'N/A','lower is better'],['Control MAE',r.controlMetric?fmt(r.controlMetric.mae):'N/A','held-out C rows'],['Selected λ',fmt(r.lambda,6),'ridge regularization']].map(a=>`<div class="metric"><div class="k">${a[0]}</div><div class="v">${a[1]}</div><div class="hint">${a[2]}</div></div>`).join('');$('modelNote').innerHTML=`<b>Model:</b> regularized ridge regression on normalized component proportions with an unpenalized intercept. Regularization is selected by E-series-only leave-one-out cross-validation. The square-free CC matrix remains a separate diagnostic. Selected λ = ${r.lambda}. Training rows: ${r.train.length}; held-out controls: ${r.controls.length}. ${r.fitAll?'All rows were fitted; no independent C-series test remains.':'C-series rows were not used to fit or tune the model.'}`;let p='<table><thead><tr><th>Specimen</th><th>Role</th><th>Actual Lab K</th><th>Predicted Lab K</th><th>Residual (actual − predicted)</th><th>Absolute error</th></tr></thead><tbody>';data.rows.forEach((x,i)=>{let e=r.y[i]-r.pred[i],role=r.train.includes(i)?'Fit':'Held-out control';p+=`<tr><td>${esc(x.id)}</td><td>${role}</td><td>${fmt(r.y[i])}</td><td>${fmt(r.pred[i])}</td><td>${fmt(e)}</td><td>${fmt(Math.abs(e))}</td></tr>`});p+='</tbody></table>';$('predTable').innerHTML=p;let F=r.cc.length;const vals=[['CC size',`${F} × ${F}`,'feature matrix'],['Symmetry error',r.maxSym.toExponential(2),'max |CCᵢⱼ − CCⱼᵢ|'],['Training kernel rank',`${r.rankEstimate} / ${r.train.length}`,'rank estimate'],['Diagonal minimum',fmt(Math.min(...r.cc.map((row,i)=>row[i])),6),'non-negative Gram diagonal']];$('matrixMetrics').innerHTML=vals.map(a=>`<div class="metric"><div class="k">${a[0]}</div><div class="v">${a[1]}</div><div class="hint">${a[2]}</div></div>`).join('');$('matrixNote').textContent=`CC is built as Z·Zᵀ using one triangle and mirrored values, so symmetry is exact by construction (measured max difference ${r.maxSym}). CC is not supposed to be an identity matrix. Since this matrix may be rank-deficient, its pseudoinverse product is a projection, not necessarily a full identity.`;let m=Math.min(24,F),h='<table class="matrix"><thead><tr><th>Feature</th>'+Array.from({length:m},(_,i)=>`<th>f${i+1}</th>`).join('')+'</tr></thead><tbody>';for(let i=0;i<m;i++)h+=`<tr><td>f${i+1}</td>`+r.cc[i].slice(0,m).map(v=>`<td>${fmt(v,5)}</td>`).join('')+'</tr>';$('ccPreview').innerHTML=h+'</tbody></table>';drawCharts();}
+
+// ---------------------------------------------------------------------------
+// Pearson Correlation Coefficient matrix over the n raw input parameters.
+// Returns { cc: n×n matrix, warnings: string[] }
+// cc[i][j] === cc[j][i] (computed once, assigned to both sides).
+// cc[i][i] === 1 for every valid parameter.
+// Undefined correlations (constant column or < 2 observations) are set to
+// NaN and reported in warnings[].
+// ---------------------------------------------------------------------------
+function makePearsonCC(rows, labels) {
+  const n = labels.length;
+  const N = rows.length;
+  const warnings = [];
+
+  // Extract column vectors of raw parameter values (one array per parameter).
+  const cols = labels.map((_, j) => rows.map(r => r.x[j]));
+
+  // Per-column mean and std-dev using all rows.
+  const colMean = cols.map(c => c.reduce((s, v) => s + v, 0) / N);
+  const colStd  = cols.map((c, j) => {
+    const m = colMean[j];
+    const variance = c.reduce((s, v) => s + (v - m) ** 2, 0) / N;
+    return Math.sqrt(variance);
+  });
+
+  // Flag constant columns.
+  const constantCol = colStd.map((s, j) => {
+    if (s < 1e-14) {
+      warnings.push(`Parameter "${labels[j]}" is constant across all specimens — its correlations are undefined (NaN).`);
+      return true;
+    }
+    return false;
+  });
+
+  // Build n×n matrix. Compute each pair once and mirror.
+  const cc = Array.from({ length: n }, () => Array(n).fill(NaN));
+
+  for (let i = 0; i < n; i++) {
+    // Diagonal is always 1 for valid (non-constant) columns.
+    cc[i][i] = constantCol[i] ? NaN : 1;
+
+    for (let j = i + 1; j < n; j++) {
+      if (constantCol[i] || constantCol[j]) {
+        // Leave as NaN — already set by fill above.
+        continue;
+      }
+      // Pearson r using the same N observations for every pair.
+      // r = Σ(xi - x̄)(xj - x̄) / (N · σi · σj)
+      let cov = 0;
+      for (let k = 0; k < N; k++) {
+        cov += (cols[i][k] - colMean[i]) * (cols[j][k] - colMean[j]);
+      }
+      cov /= N;
+      let r = cov / (colStd[i] * colStd[j]);
+      // Clamp to [-1, 1] to absorb any floating-point overshoot.
+      r = Math.max(-1, Math.min(1, r));
+      // Assign once to both sides — guarantees exact symmetry.
+      cc[i][j] = r;
+      cc[j][i] = r;
+    }
+  }
+
+  return { cc, warnings };
+}
+
+// Validation checks run after computing the Pearson CC matrix.
+function validatePearsonCC(cc, labels) {
+  const n = cc.length;
+  const issues = [];
+  let maxAsym = 0;
+  let diagOk = true;
+  let rangeOk = true;
+
+  for (let i = 0; i < n; i++) {
+    // Diagonal must be 1 (or NaN for constant cols, which is already flagged).
+    if (!isNaN(cc[i][i]) && Math.abs(cc[i][i] - 1) > 1e-10) {
+      diagOk = false;
+      issues.push(`Diagonal [${i}][${i}] = ${cc[i][i]} (expected 1).`);
+    }
+    for (let j = i + 1; j < n; j++) {
+      if (isNaN(cc[i][j]) || isNaN(cc[j][i])) continue;
+      // Symmetry: should be exactly equal since we assign from one value.
+      const asym = Math.abs(cc[i][j] - cc[j][i]);
+      if (asym > maxAsym) maxAsym = asym;
+      // Range check.
+      if (Math.abs(cc[i][j]) > 1 + 1e-10) {
+        rangeOk = false;
+        issues.push(`CC[${i}][${j}] = ${cc[i][j]} is outside [-1, 1].`);
+      }
+    }
+  }
+
+  return { diagOk, rangeOk, maxAsym, issues };
+}
+
+function calculate(){if(!data){$('fileStatus').textContent='Upload both required files before calculating.';return}try{const n=data.labels.length;if(n<1||n>10)throw Error('Use between 1 and 10 parameters.');if(data.rows.some(r=>r.x.length!==n||!Number.isFinite(r.y)))throw Error('Every row must contain all parameter values and a numeric Lab K target.');const features=data.rows.map(r=>featureVector(r.x)),X=proportionFeatures(data.rows),y=data.rows.map(r=>r.y),fitAll=$('fitAll').checked,train=data.rows.map((r,i)=>i).filter(i=>fitAll||/^E/i.test(data.rows[i].id));if(train.length<3)throw Error('At least three training specimens are required.');const mode=$('selection').value,chosen=mode==='a14'?{lambda:1e-8,results:[]}:chooseRidgeLambda(X,y,train,mode==='mae'?'mae':'rmse');const pred=ridgeFitPredict(X,y,train,data.rows.map((_,i)=>i),chosen.lambda);const cv=chosen.results.find(x=>x.lambda===chosen.lambda);let cvMetric=cv?{mae:cv.mae,rmse:cv.rmse}:null;const controls=data.rows.map((r,i)=>i).filter(i=>!train.includes(i));const controlMetric=controls.length?metrics(controls.map(i=>y[i]),controls.map(i=>pred[i])):null;const fitPred=train.map(i=>pred[i]),fitMetric=metrics(train.map(i=>y[i]),fitPred);
+
+  // A-14 polynomial Gram matrix (kept for legacy matrix downloads, unchanged).
+  const gramF=transpose(features),gramCC=makeCC(gramF);
+
+  // Pearson CC matrix over the n raw input parameters (n×n, diagonal=1).
+  const {cc, warnings: ccWarnings} = makePearsonCC(data.rows, data.labels);
+  const ccValidation = validatePearsonCC(cc, data.labels);
+
+  // Symmetry diagnostic on the Pearson CC (should be 0 — we assign from one value).
+  let maxSym = ccValidation.maxAsym;
+
+  let rankEstimate=0;const kk=kernel(features,train);
+  let A=kk.map(r=>r.slice()),scale=Math.max(...A.flat().map(Math.abs),1);for(let k=0;k<A.length;k++){let p=k;for(let i=k+1;i<A.length;i++)if(Math.abs(A[i][k])>Math.abs(A[p][k]))p=i;if(Math.abs(A[p][k])<scale*1e-10)continue;[A[k],A[p]]=[A[p],A[k]];for(let i=k+1;i<A.length;i++){let q=A[i][k]/A[k][k];for(let j=k;j<A.length;j++)A[i][j]-=q*A[k][j]}rankEstimate++}
+
+  latest={features,gramCC,cc,ccWarnings,ccValidation,pred,y,train,controls,lambda:chosen.lambda,cvMetric,fitMetric,controlMetric,maxSym,rankEstimate,chosen,fitAll};renderResults();}catch(e){$('fileStatus').textContent='Calculation stopped: '+e.message;console.error(e)}}
+function renderResults(){let r=latest;overview();$('performanceMetrics').innerHTML=[['E-series LOOCV MAE',r.cvMetric?fmt(r.cvMetric.mae):'N/A','lower is better'],['E-series LOOCV RMSE',r.cvMetric?fmt(r.cvMetric.rmse):'N/A','lower is better'],['Control MAE',r.controlMetric?fmt(r.controlMetric.mae):'N/A','held-out C rows'],['Selected λ',fmt(r.lambda,6),'ridge regularization']].map(a=>`<div class="metric"><div class="k">${a[0]}</div><div class="v">${a[1]}</div><div class="hint">${a[2]}</div></div>`).join('');$('modelNote').innerHTML=`<b>Model:</b> regularized ridge regression on normalized component proportions with an unpenalized intercept. Regularization is selected by E-series-only leave-one-out cross-validation. The square-free Gram matrix (Z·Zᵀ) is retained as a separate A-14 diagnostic. Selected λ = ${r.lambda}. Training rows: ${r.train.length}; held-out controls: ${r.controls.length}. ${r.fitAll?'All rows were fitted; no independent C-series test remains.':'C-series rows were not used to fit or tune the model.'}`;let p='<table><thead><tr><th>Specimen</th><th>Role</th><th>Actual Lab K</th><th>Predicted Lab K</th><th>Residual (actual − predicted)</th><th>Absolute error</th></tr></thead><tbody>';data.rows.forEach((x,i)=>{let e=r.y[i]-r.pred[i],role=r.train.includes(i)?'Fit':'Held-out control';p+=`<tr><td>${esc(x.id)}</td><td>${role}</td><td>${fmt(r.y[i])}</td><td>${fmt(r.pred[i])}</td><td>${fmt(e)}</td><td>${fmt(Math.abs(e))}</td></tr>`});p+='</tbody></table>';$('predTable').innerHTML=p;
+
+  // Pearson CC diagnostics.
+  const n=r.cc.length;
+  const diagVals=r.cc.map((row,i)=>row[i]).filter(v=>!isNaN(v));
+  const diagMin=diagVals.length?Math.min(...diagVals):NaN;
+  const diagMax=diagVals.length?Math.max(...diagVals):NaN;
+  const offDiagVals=[];for(let i=0;i<n;i++)for(let j=i+1;j<n;j++)if(!isNaN(r.cc[i][j]))offDiagVals.push(r.cc[i][j]);
+  const nanCount=r.cc.flat().filter(v=>isNaN(v)).length;
+
+  const vals=[
+    ['CC size',`${n} × ${n}`,'one cell per parameter pair'],
+    ['Diagonal range',diagVals.length?`${diagMin.toFixed(6)} – ${diagMax.toFixed(6)}`:'N/A','must be 1.000000 for valid params'],
+    ['Symmetry error',r.maxSym.toExponential(2),'max |CCᵢⱼ − CCⱼᵢ| (exact 0 expected)'],
+    ['Undefined cells',nanCount,'constant columns or < 2 observations']
+  ];
+  $('matrixMetrics').innerHTML=vals.map(a=>`<div class="metric"><div class="k">${a[0]}</div><div class="v">${a[1]}</div><div class="hint">${a[2]}</div></div>`).join('');
+
+  const diagPass=r.ccValidation.diagOk;
+  const symPass=r.maxSym<1e-10;
+  const rangePass=r.ccValidation.rangeOk;
+  let noteHTML=`<b>Pearson CC matrix (${n}×${n}):</b> `
+    +`diagonal = ${diagPass?'✓ all 1':'✗ error — see issues below'} · `
+    +`symmetry error = ${r.maxSym.toExponential(2)} (${symPass?'✓ exact':'✗'}) · `
+    +`range [-1,1] = ${rangePass?'✓':'✗'}. `
+    +`Computed as Pearson r over all ${data.rows.length} specimens. `
+    +`Off-diagonal values represent linear correlation between raw component inputs.`;
+  if(r.ccWarnings.length){noteHTML+=`<br><b>Warnings:</b> `+r.ccWarnings.map(w=>`<span style="color:#814a17">${esc(w)}</span>`).join('; ');}
+  if(r.ccValidation.issues.length){noteHTML+=`<br><b>Validation issues:</b> `+r.ccValidation.issues.map(w=>`<span style="color:#b54742">${esc(w)}</span>`).join('; ');}
+  $('matrixNote').innerHTML=noteHTML;
+
+  // Preview: show up to 10×10 of the Pearson CC.
+  let m=Math.min(10,n),h='<table class="matrix"><thead><tr><th>Parameter</th>'+data.labels.slice(0,m).map(l=>`<th>${esc(l)}</th>`).join('')+'</tr></thead><tbody>';
+  for(let i=0;i<m;i++){h+=`<tr><td>${esc(data.labels[i])}</td>`+r.cc[i].slice(0,m).map(v=>isNaN(v)?'<td style="color:#b54742">NaN</td>':`<td>${fmt(v,4)}</td>`).join('')+'</tr>';}
+  $('ccPreview').innerHTML=h+'</tbody></table>';
+
+  drawCharts();}
 function drawCharts(){let r=latest;plot('scatter',(ctx,w,h)=>{let all=r.y.concat(r.pred),lo=Math.min(...all),hi=Math.max(...all);if(lo===hi)hi=lo+1;let x=v=>35+(v-lo)/(hi-lo)*(w-55),y=v=>h-25-(v-lo)/(hi-lo)*(h-45);ctx.strokeStyle='#b5c5d2';ctx.beginPath();ctx.moveTo(x(lo),y(lo));ctx.lineTo(x(hi),y(hi));ctx.stroke();r.y.forEach((v,i)=>{ctx.beginPath();ctx.fillStyle=r.controls.includes(i)?'#d98a22':'#087f8c';ctx.arc(x(v),y(r.pred[i]),5,0,Math.PI*2);ctx.fill()});ctx.fillStyle='#52677b';ctx.fillText('Actual Lab K',w/2-25,h-5);ctx.save();ctx.translate(12,h/2+25);ctx.rotate(-Math.PI/2);ctx.fillText('Predicted',0,0);ctx.restore()});plot('residual',(ctx,w,h)=>{let e=r.y.map((v,i)=>v-r.pred[i]),max=Math.max(...e.map(Math.abs),1),barW=(w-45)/e.length;ctx.strokeStyle='#9eb0bf';ctx.beginPath();ctx.moveTo(30,h/2);ctx.lineTo(w-8,h/2);ctx.stroke();e.forEach((v,i)=>{ctx.fillStyle=r.controls.includes(i)?'#d98a22':'#087f8c';let bh=v/max*(h/2-25);ctx.fillRect(32+i*barW,v>=0?h/2-bh:h/2,Math.max(2,barW-3),Math.abs(bh));ctx.fillStyle='#52677b';ctx.font='10px sans-serif';ctx.fillText(data.rows[i].id,32+i*barW,h-6)})});
 plot('comparison',(ctx,w,h)=>{let n=r.y.length,left=38,right=10,top=18,bottom=32,plotW=w-left-right,plotH=h-top-bottom,max=Math.max(1,...r.y,...r.pred)*1.12,group=plotW/n,bw=Math.max(2,Math.min(16,group*.32));ctx.strokeStyle='#dce5ee';ctx.beginPath();ctx.moveTo(left,h-bottom);ctx.lineTo(w-right,h-bottom);ctx.stroke();r.y.forEach((v,i)=>{let x=left+i*group+group/2;ctx.fillStyle=r.controls.includes(i)?'#d98a22':'#087f8c';let ah=v/max*plotH,ph=r.pred[i]/max*plotH;ctx.fillRect(x-bw-1,top+plotH-ah,bw,ah);ctx.fillStyle='#52677b';ctx.fillRect(x+1,top+plotH-ph,bw,ph);if(group>24){ctx.fillStyle='#52677b';ctx.font='9px sans-serif';ctx.fillText(data.rows[i].id,x-10,h-12)}});ctx.fillStyle='#52677b';ctx.font='11px sans-serif';ctx.fillText('Teal/orange = actual · grey = predicted',left,12)});
 plot('inputsChart',(ctx,w,h)=>{let n=data.rows.length,p=data.labels.length,left=35,right=8,top=18,bottom=30,pw=w-left-right,ph=h-top-bottom;let max=Math.max(1,...data.rows.flatMap(x=>x.x.map(v=>Math.abs(v))));let group=pw/n,bw=Math.max(1,Math.min(12,group/Math.max(1,p+1)));let colors=['#087f8c','#d98a22','#5b7cba','#8a5ea8','#4f9d92','#c45b5b','#777777','#b28b36','#477c65','#7d6aa5'];data.rows.forEach((row,i)=>{row.x.forEach((v,j)=>{let bh=Math.abs(v)/max*ph;ctx.fillStyle=colors[j%colors.length];ctx.fillRect(left+i*group+j*bw,top+ph-bh,Math.max(1,bw-1),bh)});if(group>24){ctx.fillStyle='#52677b';ctx.font='9px sans-serif';ctx.fillText(row.id,left+i*group,h-12)}});ctx.fillStyle='#52677b';ctx.font='11px sans-serif';ctx.fillText(`${p} parameters · absolute input magnitude (scaled)`,left,12)})}
@@ -52,8 +196,8 @@ function plot(id,draw){let c=$(id),ctx=c.getContext('2d'),w=c.clientWidth||600,h
 function sheetFromRows(rows){return XLSX.utils.aoa_to_sheet(rows)}function downloadBook(name,sheets){if(!window.XLSX){alert('Excel export needs an internet connection to load the SheetJS library.');return}let wb=XLSX.utils.book_new();sheets.forEach(s=>XLSX.utils.book_append_sheet(wb,s[1],s[0].slice(0,31)));XLSX.writeFile(wb,name)}
 function predRows(){let r=latest;return [['Specimen','Role','Actual Lab K','Predicted Lab K','Residual actual-minus-predicted','Absolute error'],...data.rows.map((x,i)=>[x.id,r.train.includes(i)?'Fit':'Held-out control',r.y[i],r.pred[i],r.y[i]-r.pred[i],Math.abs(r.y[i]-r.pred[i])])]}
 function exportPred(){downloadBook('ConcreteLab_Predictions.xlsx',[['Predictions',sheetFromRows(predRows())],['Input data',sheetFromRows([['Specimen',...data.labels,'Lab K'],...data.rows.map(x=>[x.id,...x.x,x.y])])]])}
-function exportCC(){let r=latest,n=r.cc.length;let rows=[['Feature',...Array.from({length:n},(_,i)=>'f'+(i+1))],...r.cc.map((row,i)=>['f'+(i+1),...row])];downloadBook('ConcreteLab_Full_CC_Matrix.xlsx',[['CC Matrix',sheetFromRows(rows)]])}
-function exportReport(){let r=latest,rows=[['Check','Result'],['Dataset',data.name],['Parameter count',data.labels.length],['Feature count',r.cc.length],['Specimens',data.rows.length],['Fit row count',r.train.length],['Held-out control count',r.controls.length],['Selected lambda',r.lambda],['LOOCV MAE',r.cvMetric?.mae??'N/A'],['LOOCV RMSE',r.cvMetric?.rmse??'N/A'],['Control MAE',r.controlMetric?.mae??'N/A'],['Control RMSE',r.controlMetric?.rmse??'N/A'],['Max symmetry difference',r.maxSym],['Training kernel rank estimate',r.rankEstimate],['Fit all rows',r.fitAll?'YES - no independent controls':'NO'],['Method','Per-specimen normalization; proportion-based ridge with intercept; lambda selected by E-series-only LOOCV; square-free CC matrix retained as a separate diagnostic']];let grid=[['Lambda','LOOCV MAE','LOOCV RMSE'],...r.chosen.results.map(x=>[x.lambda,x.mae,x.rmse])];downloadBook('ConcreteLab_Validation_Report.xlsx',[['Validation',sheetFromRows(rows)],['Predictions',sheetFromRows(predRows())],['Lambda CV',sheetFromRows(grid)],['CC Matrix',sheetFromRows([['Feature',...r.cc.map((_,i)=>'f'+(i+1))],...r.cc.map((row,i)=>['f'+(i+1),...row])])]])}
+function exportCC(){let r=latest,n=r.cc.length;let rows=[['Parameter',...data.labels],...r.cc.map((row,i)=>[data.labels[i],...row.map(v=>isNaN(v)?'NaN':v)])];downloadBook('ConcreteLab_Pearson_CC_Matrix.xlsx',[['Pearson CC Matrix',sheetFromRows(rows)]])}
+function exportReport(){let r=latest,rows=[['Check','Result'],['Dataset',data.name],['Parameter count',data.labels.length],['Feature count (A-14 Gram)',r.gramCC.length],['Specimens',data.rows.length],['Fit row count',r.train.length],['Held-out control count',r.controls.length],['Selected lambda',r.lambda],['LOOCV MAE',r.cvMetric?.mae??'N/A'],['LOOCV RMSE',r.cvMetric?.rmse??'N/A'],['Control MAE',r.controlMetric?.mae??'N/A'],['Control RMSE',r.controlMetric?.rmse??'N/A'],['Pearson CC diagonal check',r.ccValidation.diagOk?'PASS — all valid diagonals = 1':'FAIL'],['Pearson CC symmetry error (max|CCij-CCji|)',r.maxSym],['Pearson CC range check [-1,1]',r.ccValidation.rangeOk?'PASS':'FAIL'],['Pearson CC undefined cells (NaN)',r.cc.flat().filter(v=>isNaN(v)).length],['Pearson CC warnings',r.ccWarnings.join('; ')||'None'],['Fit all rows',r.fitAll?'YES - no independent controls':'NO'],['Method','Per-specimen normalization; proportion-based ridge with intercept; lambda selected by E-series-only LOOCV; Pearson CC computed over raw input parameters; A-14 Gram matrix (Z·Zᵀ) retained separately']];let grid=[['Lambda','LOOCV MAE','LOOCV RMSE'],...r.chosen.results.map(x=>[x.lambda,x.mae,x.rmse])];const ccRows=[['Parameter',...data.labels],...r.cc.map((row,i)=>[data.labels[i],...row.map(v=>isNaN(v)?'NaN':v)])];downloadBook('ConcreteLab_Validation_Report.xlsx',[['Validation',sheetFromRows(rows)],['Predictions',sheetFromRows(predRows())],['Lambda CV',sheetFromRows(grid)],['Pearson CC Matrix',sheetFromRows(ccRows)]])}
 function exportCharts(){if(!latest||!data){alert('Calculate results before exporting chart data.');return}let r=latest;let rows=[['Specimen','Role','Actual Lab K','Predicted Lab K','Residual','Absolute error',...data.labels.map(x=>'Input: '+x)],...data.rows.map((x,i)=>[x.id,r.train.includes(i)?'Fit':'Held-out control',r.y[i],r.pred[i],r.y[i]-r.pred[i],Math.abs(r.y[i]-r.pred[i]),...x.x])];let summary=[['Metric','Value'],['MAE',r.allMetric?.mae??''],['RMSE',r.allMetric?.rmse??''],['Control MAE',r.controlMetric?.mae??''],['Control RMSE',r.controlMetric?.rmse??'']];downloadBook('ConcreteLab_Chart_Data.xlsx',[['Chart Data',sheetFromRows(rows)],['Metrics',sheetFromRows(summary)]]);}
 async function readFile(file){if(!file)throw Error('Select a file first.');let buf=await file.arrayBuffer();if(file.name.toLowerCase().endsWith('.csv')){let txt=new TextDecoder().decode(buf);return [txt.split(/\r?\n/).map(line=>line.split(',').map(v=>v.trim()))]}let wb=XLSX.read(buf,{type:'array'});return wb.SheetNames.map(n=>XLSX.utils.sheet_to_json(wb.Sheets[n],{header:1,defval:null}))}
 function norm(s){return String(s??'').toLowerCase().replace(/[^a-z0-9]/g,'')}
