@@ -1,16 +1,17 @@
-const CACHE = 'concretelab-v1';
+const CACHE = 'concretelab-v2';
 const PRECACHE = [
   '/concrete-calculator.html',
   '/manifest.json',
   '/icons/icon-192.png',
-  '/icons/icon-512.png',
-  'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'
+  '/icons/icon-512.png'
 ];
 
-// Install: cache everything up front
+// Install: cache only local assets — NOT the CDN script
 self.addEventListener('install', e => {
   e.waitUntil(
-    caches.open(CACHE).then(cache => cache.addAll(PRECACHE)).then(() => self.skipWaiting())
+    caches.open(CACHE)
+      .then(cache => cache.addAll(PRECACHE))
+      .then(() => self.skipWaiting())
   );
 });
 
@@ -23,25 +24,33 @@ self.addEventListener('activate', e => {
   );
 });
 
-// Fetch: cache-first for precached assets, network-first for everything else
+// Fetch strategy:
+// - CDN requests (SheetJS etc): always go to network, never intercept
+// - Local assets: cache-first
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   const url = e.request.url;
 
-  // Cache-first for the calculator page and its known assets
-  const isCacheable = PRECACHE.some(p => url.includes(p.replace('https://cdnjs.cloudflare.com', '')));
-  if (isCacheable) {
+  // Never intercept CDN requests — let them go straight to network
+  if (url.includes('cdnjs.cloudflare.com') || url.includes('cdn.jsdelivr.net')) return;
+
+  // Cache-first for local precached assets
+  const isLocal = PRECACHE.some(p => url.endsWith(p));
+  if (isLocal) {
     e.respondWith(
-      caches.match(e.request).then(cached => cached || fetch(e.request).then(res => {
-        const clone = res.clone();
-        caches.open(CACHE).then(cache => cache.put(e.request, clone));
-        return res;
-      }))
+      caches.match(e.request).then(cached => {
+        if (cached) return cached;
+        return fetch(e.request).then(res => {
+          const clone = res.clone();
+          caches.open(CACHE).then(cache => cache.put(e.request, clone));
+          return res;
+        });
+      })
     );
     return;
   }
 
-  // Network-first for everything else (navigation, API calls)
+  // Network-first for everything else (navigation, SSR routes)
   e.respondWith(
     fetch(e.request).catch(() => caches.match(e.request))
   );
