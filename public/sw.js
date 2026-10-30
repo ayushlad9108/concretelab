@@ -1,4 +1,4 @@
-const CACHE = 'concretelab-v2';
+const CACHE = 'concretelab-v3';
 const PRECACHE = [
   '/concrete-calculator.html',
   '/manifest.json',

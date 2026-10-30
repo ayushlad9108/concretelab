@@ -2,7 +2,7 @@
   "name": "ConcreteLab",
   "short_name": "ConcreteLab",
   "description": "Concrete strength calculation, Lab K prediction and matrix validation.",
-  "start_url": "/concrete-calculator.html",
+  "start_url": "/",
   "display": "standalone",
   "orientation": "any",
   "background_color": "#102b46",
